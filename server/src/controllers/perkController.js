@@ -1,21 +1,18 @@
 import Joi from 'joi';
 import { Perk } from '../models/Perk.js';
 
-// validation schema for creating/updating a perk
+// Create a base schema
 const perkSchema = Joi.object({
-  // check that title is at least 2 characters long, and required
-  title: Joi.string().min(2).required(),
-  // description is optional
+  // Make title optional by removing .required()
+  title: Joi.string().min(2),
   description: Joi.string().allow(''),
-  // category must be one of the defined values, default to 'other'
   category: Joi.string().valid('food','tech','travel','fitness','other').default('other'),
-  // discountPercent must be between 0 and 100, default to 0
   discountPercent: Joi.number().min(0).max(100).default(0),
-  // merchant is optional
   merchant: Joi.string().allow('')
-
 }); 
 
+// Create a separate schema for creating new perks (where title is required)
+const createPerkSchema = perkSchema.fork('title', schema => schema.required());
   
 
 // Filter perks by exact title match if title query parameter is provided 
@@ -56,8 +53,7 @@ export async function getAllPerks(req, res, next) {
 // Create a new perk
 export async function createPerk(req, res, next) {
   try {
-    // validate request body against schema
-    const { value, error } = perkSchema.validate(req.body);
+    const { value, error } = createPerkSchema.validate(req.body);
     if (error) return res.status(400).json({ message: error.message });
      // ...value spreads the validated fields
     const doc = await Perk.create({ ...value});
@@ -70,7 +66,48 @@ export async function createPerk(req, res, next) {
 // TODO
 // Update an existing perk by ID and validate only the fields that are being updated 
 export async function updatePerk(req, res, next) {
-  
+  try {
+    // First check if perk exists
+    const existingPerk = await Perk.findById(req.params.id);
+    if (!existingPerk) {
+      return res.status(404).json({ message: 'Perk not found' });
+    }
+
+    // Only validate the fields that are provided in the request
+    const { value, error } = perkSchema.validate(req.body, { 
+      stripUnknown: true,
+      allowUnknown: false,
+      presence: 'optional'
+    });
+    
+    if (error) return res.status(400).json({ message: error.message });
+
+    // Create an update object only with fields that were provided
+    const updates = {};
+    Object.entries(req.body).forEach(([key, val]) => {
+      if (val !== undefined) {
+        updates[key] = val;
+      }
+    });
+
+    // Update using $set to only modify provided fields
+    const updatedPerk = await Perk.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { 
+        new: true, 
+        runValidators: true,
+        omitUndefined: true  // Prevents undefined values from being saved
+      }
+    );
+
+    res.json({ perk: updatedPerk });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Duplicate perk for this merchant' });
+    }
+    next(err);
+  }
 }
 
 
